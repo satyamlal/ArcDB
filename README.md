@@ -1,5 +1,3 @@
-# ArcDB
-
 **ArcDB** is a lightweight, multi-threaded key-value store written in Rust. It is designed as a deep dive into systems programming, focusing on building a Redis-compatible server from the ground up.
 
 ## 🎯 Project Goals
