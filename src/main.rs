@@ -1,38 +1,47 @@
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::thread;
+use std::{
+    thread,
+    io::{Read, Write},
+    net::{TcpListener, TcpStream},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc
+    }
+};
+
+mod resp;
+
+use resp::RespValue;
 
 struct ServerState {
     active_users: AtomicUsize,
 }
 
 fn handle_client(mut stream: TcpStream, user_id: usize, state: Arc<ServerState>) {
-    let mut buffer = [0; 512]; 
-
+    let mut buffer = [0; 512];
     loop {
-        // SYSTEM CALL: read()
-        // Thread sleeps here waiting for network packets.
         match stream.read(&mut buffer) {
             Ok(0) => {
-                // Disconnect logic
-                // Ordering::SeqCst ensures all threads see this change instantly.
                 let current_count = state.active_users.fetch_sub(1, Ordering::SeqCst) - 1;
-                println!("User {} disconnected. Active users: {}", user_id, current_count);
+                println!("User {} connected. Active Users: {}", user_id, current_count);
                 break;
             }
-            Ok(bytes_read) => {
-                // Echo logic
-                if let Err(e) = stream.write_all(&buffer[..bytes_read]) {
-                    eprintln!("Write error for User {}: {}", user_id, e);
+            Ok(_bytes_read) => {  // change bytes_read --> _bytes_read to ignore the size for now, blindly replying "OK"
+                let response = RespValue::SimpleString("OK".to_string());
+
+                // We call the function we wrote in resp.rs to get the protocol bytes (+OK\r\n) and then 
+                // us object ko bytes mein convert kiya (0x2B 0x4F 0x4B 0x0D 0x0A).
+                let encoded_bytes = response.encode();
+
+                // Send Over TCP. Write those specific bytes to the stream.
+                // This pushes the byte buffer into the kernel's TCP socket buffer.
+                if let Err(e) = stream.write_all(&encoded_bytes)  {
+                    eprintln!("Write error for user {}: {}", user_id, e);
                     break;
                 }
             }
-            Err(_) => {
-                // Unexpected error (connection reset, etc.)
+            Err(_e) => {
                 let current_count = state.active_users.fetch_sub(1, Ordering::SeqCst) - 1;
-                println!("User {} dropped. Active users: {}", user_id, current_count);
+                println!("User {} dropped. Active Users: {}", user_id, current_count);
                 break;
             }
         }
@@ -40,35 +49,29 @@ fn handle_client(mut stream: TcpStream, user_id: usize, state: Arc<ServerState>)
 }
 
 fn main() -> std::io::Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:8080")?;
-    println!("Concurrent Server listening on 127.0.0.1:8080");
+    let localhost = "127.0.0.1:9999";
+    let listener = TcpListener::bind(localhost)?;
+    println!("Concurrent Server is listening on {}", localhost);
 
-    // HEAP ALLOCATION: State ko Heap pe move kar rahe hain taaki threads share kar sakein.
-    // (Moving State to Heap so threads can share it.)
     let state = Arc::new(ServerState {
         active_users: AtomicUsize::new(0),
     });
-
-    // Connection Counter (Just for assigning unique IDs)
     let mut unique_id_counter = 0;
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 unique_id_counter += 1;
-                
-                // CLONE: Arc ka clone bana rahe hain. Data copy nahi ho raha, sirf reference count badh raha hai.
                 let state_clone = Arc::clone(&state);
-
-                // ATOMIC OP: Increment active users safely.
                 let count = state.active_users.fetch_add(1, Ordering::SeqCst) + 1;
-                println!("User {} connected. Active users: {}", unique_id_counter, count);
 
-                thread::spawn(move || {
-                    handle_client(stream, unique_id_counter, state_clone);
-                });
+                println!("User {} connected. Total users: {}", unique_id_counter, count);
+
+                thread::spawn(move || {handle_client(stream, unique_id_counter, state_clone);});
             }
-            Err(e) => eprintln!("Connection failed: {}", e),
+            Err(e) => {
+                eprintln!("Connection failed: {}", e);
+            }
         }
     }
     Ok(())
