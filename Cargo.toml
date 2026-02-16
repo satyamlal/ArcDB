@@ -2,5 +2,6 @@
 name = "arcdb-rust"
 version = "0.1.0"
 edition = "2024"
+default-run =  "arcdb-rust"
 
 [dependencies]
